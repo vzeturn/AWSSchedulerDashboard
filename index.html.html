@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Resource Scheduler Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .status-running { color: #28a745; font-weight: bold; }
+        .status-stopped { color: #dc3545; font-weight: bold; }
+        .status-pending { color: #ffc107; font-weight: bold; }
+        .status-unknown { color: #6c757d; }
+        .status-error { color: #dc3545; }
+        .status-not-found { color: #fd7e14; }
+        .card { margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .next-action { font-size: 0.85em; }
+        .schedule-display { font-size: 0.9em; color: #666; }
+        .action-btn { margin: 2px; }
+        .time-badge { font-family: monospace; }
+        .days-display { font-size: 0.8em; }
+        .loading { opacity: 0.6; pointer-events: none; }
+        .error-message { 
+            background: #f8d7da; 
+            color: #721c24; 
+            padding: 10px; 
+            border-radius: 5px; 
+            margin: 10px 0; 
+        }
+        .success-message { 
+            background: #d4edda; 
+            color: #155724; 
+            padding: 10px; 
+            border-radius: 5px; 
+            margin: 10px 0; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <div class="row">
+            <div class="col-12">
+                <nav class="navbar navbar-dark bg-dark">
+                    <div class="container-fluid">
+                        <span class="navbar-brand mb-0 h1">
+                            <i class="fas fa-clock"></i> AWS Resource Scheduler
+                        </span>
+                        <div>
+                            <span id="current-time" class="text-light me-3 time-badge"></span>
+                            <span id="vietnam-time" class="text-light me-3 time-badge"></span>
+                            <button class="btn btn-outline-light btn-sm" onclick="refreshData()">
+                                <i class="fas fa-sync-alt" id="refresh-icon"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                </nav>
+            </div>
+        </div>
+
+        <!-- Alert Messages -->
+        <div class="row">
+            <div class="col-12">
+                <div id="alert-container"></div>
+            </div>
+        </div>
+
+        <!-- Dashboard Cards -->
+        <div class="row mt-3">
+            <div class="col-md-2">
+                <div class="card bg-primary text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Total Resources</h6>
+                        <h3 id="total-resources">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Running</h6>
+                        <h3 id="running-count">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card bg-danger text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Stopped</h6>
+                        <h3 id="stopped-count">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card bg-warning text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Scheduled</h6>
+                        <h3 id="scheduled-today">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card bg-info text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Actions Today</h6>
+                        <h3 id="actions-today">0</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card bg-secondary text-white">
+                    <div class="card-body text-center">
+                        <h6 class="card-title">Enabled</h6>
+                        <h3 id="enabled-count">0</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Resources Table -->
+        <div class="row mt-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fas fa-server"></i> Resources Management
+                        </h5>
+                        <div>
+                            <button class="btn btn-sm btn-success me-2" onclick="addResource()">
+                                <i class="fas fa-plus"></i> Add Resource
+                            </button>
+                            <button class="btn btn-sm btn-primary" onclick="exportConfig()">
+                                <i class="fas fa-download"></i> Export Config
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th style="width: 15%">Name</th>
+                                        <th style="width: 8%">Type</th>
+                                        <th style="width: 15%">Resource ID</th>
+                                        <th style="width: 10%">Status</th>
+                                        <th style="width: 20%">Schedule</th>
+                                        <th style="width: 12%">Next Action</th>
+                                        <th style="width: 8%">Enabled</th>
+                                        <th style="width: 12%">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resources-table">
+                                    <tr>
+                                        <td colspan="8" class="text-center">
+                                            <i class="fas fa-spinner fa-spin"></i> Loading resources...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activities -->
+        <div class="row mt-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fas fa-history"></i> Recent Activities
+                        </h5>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="clearLogs()">
+                            <i class="fas fa-trash"></i> Clear Logs
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Resource</th>
+                                        <th>Action</th>
+                                        <th>Status</th>
+                                        <th>Type</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="logs-table">
+                                    <tr>
+                                        <td colspan="5" class="text-center">
+                                            <i class="fas fa-spinner fa-spin"></i> Loading activities...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Add/Edit Resource Modal -->
+    <div class="modal fade" id="resourceModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">Add Resource</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="resourceForm">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="resourceName" class="form-label">Resource Name *</label>
+                                    <input type="text" class="form-control" id="resourceName" required 
+                                           placeholder="e.g., Web Server Dev">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="resourceType" class="form-label">Type *</label>
+                                    <select class="form-select" id="resourceType" required>
+                                        <option value="">Select Type</option>
+                                        <option value="EC2">EC2 Instance</option>
+                                        <option value="RDS">RDS Database</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="resourceId" class="form-label">Resource ID *</label>
+                            <input type="text" class="form-control" id="resourceId" required 
+                                   placeholder="e.g., i-1234567890abcdef0 or my-database">
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="startTime" class="form-label">Start Time *</label>
+                                    <input type="time" class="form-control" id="startTime" required>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="stopTime" class="form-label">Stop Time *</label>
+                                    <input type="time" class="form-control" id="stopTime" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Active Days *</label>
+                            <div class="d-flex flex-wrap gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Monday" id="monday">
+                                    <label class="form-check-label" for="monday">Monday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Tuesday" id="tuesday">
+                                    <label class="form-check-label" for="tuesday">Tuesday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Wednesday" id="wednesday">
+                                    <label class="form-check-label" for="wednesday">Wednesday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Thursday" id="thursday">
+                                    <label class="form-check-label" for="thursday">Thursday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Friday" id="friday">
+                                    <label class="form-check-label" for="friday">Friday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Saturday" id="saturday">
+                                    <label class="form-check-label" for="saturday">Saturday</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="Sunday" id="sunday">
+                                    <label class="form-check-label" for="sunday">Sunday</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="environment" class="form-label">Environment</label>
+                                    <select class="form-select" id="environment">
+                                        <option value="">Select Environment</option>
+                                        <option value="Production">Production</option>
+                                        <option value="Staging">Staging</option>
+                                        <option value="Development">Development</option>
+                                        <option value="Testing">Testing</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="team" class="form-label">Team</label>
+                                    <input type="text" class="form-control" id="team" 
+                                           placeholder="e.g., Backend, Frontend, DevOps">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="enabled" checked>
+                                <label class="form-check-label" for="enabled">
+                                    Enable automatic scheduling
+                                </label>
+                            </div>
+                        </div>
+
+                        <input type="hidden" id="editIndex" value="-1">
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveResource()">Save Resource</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // API Configuration - Real URLs from deployment
+        const API_CONFIG = {
+            GET_RESOURCES_URL: 'https://lm466opglwpvg2p2gvs7jhknqy0mwotr.lambda-url.ap-southeast-1.on.aws/',
+            SAVE_RESOURCES_URL: 'https://cnmfsmfrhhkxvp2xd27vkx4lim0mpkdc.lambda-url.ap-southeast-1.on.aws/'
+        };
+
+        // Global data
+        let resources = [];
+        let activityLogs = [];
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Dashboard initializing...');
+            console.log('API Config:', API_CONFIG);
+            
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            refreshData();
+            setInterval(refreshData, 30000); // Auto refresh every 30 seconds
+        });
+
+        function updateCurrentTime() {
+            const now = new Date();
+            const vietnam = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Ho_Chi_Minh"}));
+            
+            document.getElementById('current-time').textContent = 
+                'UTC: ' + now.toISOString().substr(11, 8);
+            document.getElementById('vietnam-time').textContent = 
+                'VN: ' + vietnam.toTimeString().substr(0, 8);
+        }
+
+        function showAlert(message, type = 'info') {
+            const alertContainer = document.getElementById('alert-container');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            alertContainer.appendChild(alertDiv);
+            
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+
+        async function refreshData() {
+            const refreshIcon = document.getElementById('refresh-icon');
+            refreshIcon.classList.add('fa-spin');
+            
+            try {
+                const success = await loadDataFromAPI();
+                if (success) {
+                    loadResourcesTable();
+                    loadDashboardCards();
+                    loadActivityLogs();
+                    console.log('Data refreshed successfully');
+                } else {
+                    showAlert('Failed to load data from API. Please check your configuration.', 'warning');
+                }
+            } catch (error) {
+                console.error('Error refreshing data:', error);
+                showAlert('Error refreshing data: ' + error.message, 'danger');
+            }
+            
+            refreshIcon.classList.remove('fa-spin');
+        }
+
+        async function loadDataFromAPI() {
+            try {
+                console.log('Fetching data from:', API_CONFIG.GET_RESOURCES_URL);
+                
+                const response = await fetch(API_CONFIG.GET_RESOURCES_URL, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('API Response:', data);
+                
+                if (data.success) {
+                    resources = data.resources || [];
+                    activityLogs = data.logs || [];
+                    console.log(`Loaded ${resources.length} resources and ${activityLogs.length} logs`);
+                    return true;
+                } else {
+                    console.error('API returned error:', data.error);
+                    showAlert('API Error: ' + (data.error || 'Unknown error'), 'danger');
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error loading data from API:', error);
+                showAlert('Network Error: ' + error.message, 'danger');
+                return false;
+            }
+        }
+
+        async function saveDataToAPI(action, payload) {
+            try {
+                console.log(`Saving data - Action: ${action}`, payload);
+                
+                const response = await fetch(API_CONFIG.SAVE_RESOURCES_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: action,
+                        ...payload
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('Save result:', result);
+                
+                if (result.success) {
+                    return true;
+                } else {
+                    showAlert('Save Error: ' + (result.error || 'Unknown error'), 'danger');
+                    return false;
+                }
+            } catch (error) {
+                console.error('Error saving data to API:', error);
+                showAlert('Network Error: ' + error.message, 'danger');
+                return false;
+            }
+        }
+        function loadDashboardCards() {
+            const total = resources.length;
+            const running = resources.filter(r => r.status === 'running').length;
+            const stopped = resources.filter(r => r.status === 'stopped').length;
+            const scheduled = resources.filter(r => r.enabled && isScheduledToday(r)).length;
+            const enabled = resources.filter(r => r.enabled).length;
+            const today = new Date().toISOString().substr(0, 10);
+            const actionsToday = activityLogs.filter(log => 
+                log.time && log.time.startsWith(today)
+            ).length;
+
+            document.getElementById('total-resources').textContent = total;
+            document.getElementById('running-count').textContent = running;
+            document.getElementById('stopped-count').textContent = stopped;
+            document.getElementById('scheduled-today').textContent = scheduled;
+            document.getElementById('actions-today').textContent = actionsToday;
+            document.getElementById('enabled-count').textContent = enabled;
+        }
+
+        function loadResourcesTable() {
+            const tbody = document.getElementById('resources-table');
+            tbody.innerHTML = '';
+
+            if (resources.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" class="text-center text-muted">
+                            <i class="fas fa-info-circle"></i> No resources configured yet. 
+                            <br>Click "Add Resource" to get started!
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            resources.forEach((resource, index) => {
+                const nextAction = getNextAction(resource);
+                const scheduleText = formatSchedule(resource);
+                
+                const row = `
+                    <tr ${!resource.enabled ? 'class="table-secondary"' : ''}>
+                        <td>
+                            <strong>${escapeHtml(resource.name)}</strong>
+                            ${resource.environment ? `<br><small class="text-muted">${escapeHtml(resource.environment)}</small>` : ''}
+                        </td>
+                        <td>
+                            <span class="badge ${resource.type === 'EC2' ? 'bg-primary' : 'bg-info'}">${resource.type}</span>
+                        </td>
+                        <td><code class="small">${escapeHtml(resource.resourceId)}</code></td>
+                        <td>
+                            <span class="status-${resource.status}">
+                                <i class="fas ${getStatusIcon(resource.status)}"></i>
+                                ${resource.status.toUpperCase()}
+                            </span>
+                            ${resource.error ? `<br><small class="text-danger" title="${escapeHtml(resource.error)}">Error</small>` : ''}
+                        </td>
+                        <td class="schedule-display">${scheduleText}</td>
+                        <td class="next-action">${nextAction}</td>
+                        <td>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" ${resource.enabled ? 'checked' : ''} 
+                                       onchange="toggleResource(${index})">
+                            </div>
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary action-btn" onclick="editResource(${index})" title="Edit">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-success action-btn" onclick="manualStart(${index})" title="Start Now">
+                                <i class="fas fa-play"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger action-btn" onclick="manualStop(${index})" title="Stop Now">
+                                <i class="fas fa-stop"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger action-btn" onclick="deleteResource(${index})" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+
+        function loadActivityLogs() {
+            const tbody = document.getElementById('logs-table');
+            tbody.innerHTML = '';
+
+            if (activityLogs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center text-muted">
+                            <i class="fas fa-info-circle"></i> No activities recorded yet.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            // Display 10 most recent logs
+            const recentLogs = activityLogs.slice(-10).reverse();
+            
+            recentLogs.forEach(log => {
+                const statusClass = log.status === 'Success' ? 'text-success' : 'text-danger';
+                const typeClass = log.type === 'Manual' ? 'bg-warning' : 'bg-info';
+                
+                const row = `
+                    <tr>
+                        <td class="time-badge">${formatLogTime(log.time || log.timestamp || 'Unknown')}</td>
+                        <td>${escapeHtml(log.resource)}</td>
+                        <td>
+                            <span class="badge ${log.action === 'START' ? 'bg-success' : log.action === 'STOP' ? 'bg-danger' : 'bg-secondary'}">
+                                ${log.action}
+                            </span>
+                        </td>
+                        <td class="${statusClass}">${log.status}</td>
+                        <td><span class="badge ${typeClass}">${log.type || 'Scheduled'}</span></td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+
+        // Utility functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatLogTime(timeStr) {
+            try {
+                const date = new Date(timeStr);
+                return date.toLocaleString('vi-VN', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            } catch (e) {
+                return timeStr;
+            }
+        }
+
+        function getStatusIcon(status) {
+            switch(status) {
+                case 'running': return 'fa-play-circle';
+                case 'stopped': return 'fa-stop-circle';
+                case 'pending': return 'fa-clock';
+                case 'error': return 'fa-exclamation-triangle';
+                case 'not-found': return 'fa-question-circle';
+                default: return 'fa-question-circle';
+            }
+        }
+
+        function formatSchedule(resource) {
+            if (!resource.enabled) return '<em class="text-muted">Disabled</em>';
+            
+            const daysShort = resource.days.map(d => d.substr(0, 3)).join(', ');
+            return `${resource.startTime} - ${resource.stopTime}<br><small class="days-display">${daysShort}</small>`;
+        }
+
+        function getNextAction(resource) {
+            if (!resource.enabled) return '<em class="text-muted">N/A</em>';
+            
+            const now = new Date();
+            const today = now.toLocaleDateString('en-US', { weekday: 'long' });
+            
+            if (!resource.days.includes(today)) {
+                return '<small class="text-muted">Not scheduled today</small>';
+            }
+            
+            const currentTime = now.toTimeString().substr(0, 5);
+            const [startHour, startMin] = resource.startTime.split(':').map(Number);
+            const [stopHour, stopMin] = resource.stopTime.split(':').map(Number);
+            
+            const startTime = startHour * 60 + startMin;
+            const stopTime = stopHour * 60 + stopMin;
+            const currentTimeMin = now.getHours() * 60 + now.getMinutes();
+            
+            if (currentTimeMin < startTime) {
+                return `<small class="text-info">Start at ${resource.startTime}</small>`;
+            } else if (currentTimeMin < stopTime) {
+                return `<small class="text-warning">Stop at ${resource.stopTime}</small>`;
+            } else {
+                return '<small class="text-muted">Done for today</small>';
+            }
+        }
+
+        function isScheduledToday(resource) {
+            const today = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+            return resource.days.includes(today);
+        }
+        function addResource() {
+            document.getElementById('modalTitle').textContent = 'Add Resource';
+            document.getElementById('resourceForm').reset();
+            document.getElementById('editIndex').value = '-1';
+            document.getElementById('enabled').checked = true;
+            new bootstrap.Modal(document.getElementById('resourceModal')).show();
+        }
+
+        function editResource(index) {
+            const resource = resources[index];
+            document.getElementById('modalTitle').textContent = 'Edit Resource';
+            
+            document.getElementById('resourceName').value = resource.name;
+            document.getElementById('resourceType').value = resource.type;
+            document.getElementById('resourceId').value = resource.resourceId;
+            document.getElementById('startTime').value = resource.startTime;
+            document.getElementById('stopTime').value = resource.stopTime;
+            document.getElementById('environment').value = resource.environment || '';
+            document.getElementById('team').value = resource.team || '';
+            document.getElementById('enabled').checked = resource.enabled;
+            document.getElementById('editIndex').value = index;
+            
+            // Set days checkboxes
+            const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+            days.forEach(day => {
+                const dayCapital = day.charAt(0).toUpperCase() + day.slice(1);
+                document.getElementById(day).checked = resource.days.includes(dayCapital);
+            });
+            
+            new bootstrap.Modal(document.getElementById('resourceModal')).show();
+        }
+
+        async function saveResource() {
+            const form = document.getElementById('resourceForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+            
+            const selectedDays = [];
+            const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+            days.forEach(day => {
+                if (document.getElementById(day).checked) {
+                    selectedDays.push(day.charAt(0).toUpperCase() + day.slice(1));
+                }
+            });
+            
+            if (selectedDays.length === 0) {
+                showAlert('Please select at least one day', 'warning');
+                return;
+            }
+            
+            const editIndex = parseInt(document.getElementById('editIndex').value);
+            const resource = {
+                id: editIndex >= 0 ? resources[editIndex].id : 'resource-' + Date.now(),
+                name: document.getElementById('resourceName').value,
+                type: document.getElementById('resourceType').value,
+                resourceId: document.getElementById('resourceId').value,
+                startTime: document.getElementById('startTime').value,
+                stopTime: document.getElementById('stopTime').value,
+                days: selectedDays,
+                environment: document.getElementById('environment').value,
+                team: document.getElementById('team').value,
+                enabled: document.getElementById('enabled').checked,
+                status: editIndex >= 0 ? resources[editIndex].status : 'unknown',
+                lastAction: editIndex >= 0 ? resources[editIndex].lastAction : 'Never',
+                created: editIndex >= 0 ? resources[editIndex].created : new Date().toISOString()
+            };
+            
+            if (editIndex >= 0) {
+                resources[editIndex] = resource;
+            } else {
+                resources.push(resource);
+            }
+            
+            const saveSuccess = await saveDataToAPI('save_resources', { resources: resources });
+            
+            if (saveSuccess) {
+                const logSuccess = await saveDataToAPI('add_log', {
+                    log: {
+                        resource: resource.name,
+                        action: editIndex >= 0 ? 'EDIT' : 'ADD',
+                        status: 'Success',
+                        type: 'Manual'
+                    }
+                });
+                
+                showAlert(`Resource ${editIndex >= 0 ? 'updated' : 'added'} successfully!`, 'success');
+                bootstrap.Modal.getInstance(document.getElementById('resourceModal')).hide();
+                refreshData();
+            }
+        }
+
+        async function toggleResource(index) {
+            resources[index].enabled = !resources[index].enabled;
+            
+            const saveSuccess = await saveDataToAPI('save_resources', { resources: resources });
+            
+            if (saveSuccess) {
+                const action = resources[index].enabled ? 'ENABLE' : 'DISABLE';
+                await saveDataToAPI('add_log', {
+                    log: {
+                        resource: resources[index].name,
+                        action: action,
+                        status: 'Success',
+                        type: 'Manual'
+                    }
+                });
+                
+                showAlert(`Resource ${action.toLowerCase()}d successfully!`, 'success');
+                refreshData();
+            } else {
+                // Revert the change if save failed
+                resources[index].enabled = !resources[index].enabled;
+                loadResourcesTable();
+            }
+        }
+
+        async function manualStart(index) {
+            if (confirm(`Start ${resources[index].name} now?`)) {
+                const success = await saveDataToAPI('manual_action', {
+                    resourceType: resources[index].type,
+                    resourceId: resources[index].resourceId,
+                    action: 'start'
+                });
+                
+                if (success) {
+                    await saveDataToAPI('add_log', {
+                        log: {
+                            resource: resources[index].name,
+                            action: 'START',
+                            status: 'Success',
+                            type: 'Manual'
+                        }
+                    });
+                    
+                    showAlert(`Start command sent to ${resources[index].name}`, 'success');
+                    setTimeout(refreshData, 2000); // Refresh after 2 seconds
+                }
+            }
+        }
+
+        async function manualStop(index) {
+            if (confirm(`Stop ${resources[index].name} now?`)) {
+                const success = await saveDataToAPI('manual_action', {
+                    resourceType: resources[index].type,
+                    resourceId: resources[index].resourceId,
+                    action: 'stop'
+                });
+                
+                if (success) {
+                    await saveDataToAPI('add_log', {
+                        log: {
+                            resource: resources[index].name,
+                            action: 'STOP',
+                            status: 'Success',
+                            type: 'Manual'
+                        }
+                    });
+                    
+                    showAlert(`Stop command sent to ${resources[index].name}`, 'success');
+                    setTimeout(refreshData, 2000); // Refresh after 2 seconds
+                }
+            }
+        }
+
+        async function deleteResource(index) {
+            if (confirm(`Delete ${resources[index].name}? This action cannot be undone.`)) {
+                const resourceName = resources[index].name;
+                resources.splice(index, 1);
+                
+                const saveSuccess = await saveDataToAPI('save_resources', { resources: resources });
+                
+                if (saveSuccess) {
+                    await saveDataToAPI('add_log', {
+                        log: {
+                            resource: resourceName,
+                            action: 'DELETE',
+                            status: 'Success',
+                            type: 'Manual'
+                        }
+                    });
+                    
+                    showAlert(`Resource deleted successfully!`, 'success');
+                    refreshData();
+                }
+            }
+        }
+
+        async function clearLogs() {
+            if (confirm('Clear all activity logs?')) {
+                const success = await saveDataToAPI('add_log', {
+                    log: {
+                        resource: 'System',
+                        action: 'CLEAR_LOGS',
+                        status: 'Success',
+                        type: 'Manual'
+                    }
+                });
+                
+                if (success) {
+                    showAlert('Logs cleared successfully!', 'success');
+                    refreshData();
+                }
+            }
+        }
+
+        function exportConfig() {
+            const config = {
+                resources: resources,
+                exported_at: new Date().toISOString(),
+                version: "1.0",
+                dashboard_url: window.location.href
+            };
+            
+            const blob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scheduler-config-${new Date().toISOString().substr(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            showAlert('Configuration exported successfully!', 'success');
+        }
+    </script>
+</body>
+</html>
